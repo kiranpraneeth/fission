@@ -30,6 +30,7 @@ import (
 
 	"github.com/satori/go.uuid"
 	"github.com/urfave/cli"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/fission/fission"
@@ -114,12 +115,13 @@ func getTargetCPU(c *cli.Context) int {
 	return targetCPU
 }
 
+// From this change onwards, we mandate that a function should reference a secret, config map and package in its own ns
 func fnCreate(c *cli.Context) error {
 	client := getClient(c.GlobalString("server"))
 
 	fnNamespace := c.String("fnNamespace")
 	envNamespace := c.String("envNamespace")
-	pkgNamespace := c.String("pkgNamespace")
+	alertOnSharedEnv := c.Bool("alert-on-shared-env")
 
 	if len(c.String("package")) > 0 {
 		fatal("--package is deprecated, please use --deploy instead.")
@@ -156,16 +158,13 @@ func fnCreate(c *cli.Context) error {
 	secretName := c.String("secret")
 	cfgMapName := c.String("configmap")
 
-	secretNameSpace := c.String("secretNamespace")
-	cfgMapNameSpace := c.String("configmapNamespace")
-
 	if len(pkgName) > 0 {
 		// use existing package
 		pkg, err := client.PackageGet(&metav1.ObjectMeta{
-			Namespace: pkgNamespace,
+			Namespace: fnNamespace,
 			Name:      pkgName,
 		})
-		checkErr(err, fmt.Sprintf("read package '%v'", pkgName))
+		checkErr(err, fmt.Sprintf("read package in Namespace: %s, '%v'. Package needs to be present in the same namespace as function", fnNamespace, pkgName))
 		pkgMetadata = &pkg.Metadata
 		envName = pkg.Spec.Environment.Name
 		envNamespace = pkg.Spec.Environment.Namespace
@@ -205,6 +204,17 @@ func fnCreate(c *cli.Context) error {
 		pkgMetadata = createPackage(client, fnNamespace, envName, envNamespace, srcArchiveName, deployArchiveName, buildcmd, specFile)
 	}
 
+	// At this point, we need to check if any other function in any ns has the same env reference if user has asked for this info.
+	// if so, warn the user that when the other function gets loaded in the env pod, the service account mounted in the env pod will have permissions to view his secret
+	// but this is a trade-off for being able to share warm-env containers. by default, we encourage sharing of env containers for optimal resource consumption.
+	// this might seem a bit over-kill in terms of performance, but since we do this in the cli and only if user has requested for notification, it should be ok.
+	if alertOnSharedEnv {
+		fnList, _ := getFunctionsByEnvironment(client, envName, envNamespace)
+		if len(fnList) > 0 {
+			warn(fmt.Sprintf("Environment : %s.%s is referenced by %d functions. When these functions are loaded in the env, they can use the SA mounted to view each others secrets.", envName, envNamespace, len(fnList)))
+		}
+	}
+
 	invokeStrategy := getInvokeStrategy(c.Int("minscale"), c.Int("maxscale"), c.String("executortype"), getTargetCPU(c))
 	resourceReq := getResourceReq(c)
 	if (c.IsSet("mincpu") || c.IsSet("maxcpu") || c.IsSet("minmemory") || c.IsSet("maxmemory")) &&
@@ -216,23 +226,35 @@ func fnCreate(c *cli.Context) error {
 	var cfgmaps []fission.ConfigMapReference
 
 	if len(secretName) > 0 {
-		if len(secretNameSpace) == 0 {
-			secretNameSpace = metav1.NamespaceDefault
+		// check the referenced secret is in the same ns as the function, if not give a warning.
+		_, err := client.SecretGet(&metav1.ObjectMeta{
+			Namespace: fnNamespace,
+			Name:      secretName,
+		})
+		if k8serrors.IsNotFound(err) {
+			warn(fmt.Sprintf("secret %s not found in Namespace: %s. Secret needs to be present in the same namespace as function", secretName, fnNamespace))
 		}
+
 		newSecret := fission.SecretReference{
 			Name:      secretName,
-			Namespace: secretNameSpace,
+			Namespace: fnNamespace,
 		}
 		secrets = []fission.SecretReference{newSecret}
 	}
 
 	if len(cfgMapName) > 0 {
-		if len(cfgMapNameSpace) == 0 {
-			cfgMapNameSpace = metav1.NamespaceDefault
+		// check the referenced cfgmap is in the same ns as the function, if not give a warning.
+		_, err := client.ConfigMapGet(&metav1.ObjectMeta{
+			Namespace: fnNamespace,
+			Name:      cfgMapName,
+		})
+		if k8serrors.IsNotFound(err) {
+			warn(fmt.Sprintf("ConfigMap %s not found in Namespace: %s. ConfigMap needs to be present in the same namespace as function", cfgMapName, fnNamespace))
 		}
+
 		newCfgMap := fission.ConfigMapReference{
 			Name:      cfgMapName,
-			Namespace: cfgMapNameSpace,
+			Namespace: fnNamespace,
 		}
 		cfgmaps = []fission.ConfigMapReference{newCfgMap}
 	}
@@ -385,13 +407,13 @@ func fnUpdate(c *cli.Context) error {
 
 	envName := c.String("env")
 	envNamespace := c.String("envNamespace")
+	alertOnSharedEnv := c.Bool("alert-on-shared-env")
 	deployArchiveName := c.String("code")
 	if len(deployArchiveName) == 0 {
 		deployArchiveName = c.String("deploy")
 	}
 	srcArchiveName := c.String("src")
 	pkgName := c.String("pkg")
-	pkgNamespace := c.String("pkgNamespace")
 	entrypoint := c.String("entrypoint")
 	buildcmd := c.String("buildcmd")
 	force := c.Bool("force")
@@ -399,25 +421,28 @@ func fnUpdate(c *cli.Context) error {
 	secretName := c.String("secret")
 	cfgMapName := c.String("configmap")
 
-	secretNameSpace := c.String("secretNamespace")
-	cfgMapNameSpace := c.String("configmapNamespace")
-
 	if len(envName) == 0 && len(deployArchiveName) == 0 && len(srcArchiveName) == 0 && len(pkgName) == 0 &&
-		len(entrypoint) == 0 && len(buildcmd) == 0 && len(secretName) == 0 && len(secretNameSpace) == 0 &&
-		len(cfgMapName) == 0 && len(cfgMapNameSpace) == 0 {
-		fatal("Need --env or --deploy or --src or --pkg or --entrypoint or --buildcmd or --secret or --secretNamespace or --configmap or --configmapNamespace argument.")
+		len(entrypoint) == 0 && len(buildcmd) == 0 && len(secretName) == 0 && len(cfgMapName) == 0 {
+		fatal("Need --env or --deploy or --src or --pkg or --entrypoint or --buildcmd or --secret or --configmap argument.")
 	}
 
 	if len(secretName) > 0 {
 		if len(function.Spec.Secrets) > 1 {
 			fatal("Please use 'fission spec apply' to update list of secrets")
 		}
-		if len(secretNameSpace) == 0 {
-			secretNameSpace = metav1.NamespaceDefault
+
+		// check that the referenced secret is in the same ns as the function, if not give a warning.
+		_, err := client.SecretGet(&metav1.ObjectMeta{
+			Namespace: fnNamespace,
+			Name:      secretName,
+		})
+		if k8serrors.IsNotFound(err) {
+			warn(fmt.Sprintf("secret %s not found in Namespace: %s. Secret needs to be present in the same namespace as function", secretName, fnNamespace))
 		}
+
 		newSecret := fission.SecretReference{
 			Name:      secretName,
-			Namespace: secretNameSpace,
+			Namespace: fnNamespace,
 		}
 		function.Spec.Secrets = []fission.SecretReference{newSecret}
 	}
@@ -426,12 +451,19 @@ func fnUpdate(c *cli.Context) error {
 		if len(function.Spec.ConfigMaps) > 1 {
 			fatal("Please use 'fission spec apply' to update list of configmaps")
 		}
-		if len(cfgMapNameSpace) == 0 {
-			cfgMapNameSpace = metav1.NamespaceDefault
+
+		// check that the referenced cfgmap is in the same ns as the function, if not give a warning.
+		_, err := client.ConfigMapGet(&metav1.ObjectMeta{
+			Namespace: fnNamespace,
+			Name:      cfgMapName,
+		})
+		if k8serrors.IsNotFound(err) {
+			warn(fmt.Sprintf("ConfigMap %s not found in Namespace: %s. ConfigMap needs to be present in the same namespace as the function", cfgMapName, fnNamespace))
 		}
+
 		newCfgMap := fission.ConfigMapReference{
 			Name:      cfgMapName,
-			Namespace: cfgMapNameSpace,
+			Namespace: fnNamespace,
 		}
 		function.Spec.ConfigMaps = []fission.ConfigMapReference{newCfgMap}
 	}
@@ -439,6 +471,17 @@ func fnUpdate(c *cli.Context) error {
 	if len(envName) > 0 {
 		function.Spec.Environment.Name = envName
 		function.Spec.Environment.Namespace = envNamespace
+
+		// At this point, we need to check if any other function in any ns has the same env reference if user has asked for this info.
+		// if so, warn the user that when the other function gets loaded in the env pod, the service account mounted in the env pod will have permissions to view his secret
+		// but this is a trade-off for being able to share warm-env containers. by default, we encourage sharing of env containers for optimal resource consumption.
+		// this might seem a bit over-kill in terms of performance, but since we do this in the cli and only if user has requested for notification, it should be ok.
+		if alertOnSharedEnv {
+			fnList, _ := getFunctionsByEnvironment(client, envName, envNamespace)
+			if len(fnList) > 0 {
+				warn(fmt.Sprintf("Environment : %s.%s is referenced by %d functions. When these functions are loaded in the env, they can use the SA mounted to view each others secrets.", envName, envNamespace, len(fnList)))
+			}
+		}
 	}
 
 	if len(entrypoint) > 0 {
@@ -446,14 +489,13 @@ func fnUpdate(c *cli.Context) error {
 	}
 	if len(pkgName) == 0 {
 		pkgName = function.Spec.Package.PackageRef.Name
-		pkgNamespace = function.Spec.Package.PackageRef.Namespace
 	}
 
 	pkg, err := client.PackageGet(&metav1.ObjectMeta{
-		Namespace: pkgNamespace,
+		Namespace: fnNamespace,
 		Name:      pkgName,
 	})
-	checkErr(err, fmt.Sprintf("read package '%v.%v'", pkgName, pkgNamespace))
+	checkErr(err, fmt.Sprintf("read package '%v.%v'. Pkg should be present in the same ns as the function", pkgName, fnNamespace))
 
 	pkgMetadata := &pkg.Metadata
 
@@ -480,6 +522,9 @@ func fnUpdate(c *cli.Context) error {
 			}
 		}
 	}
+
+	// TODO : One corner case where user just updates the pkg reference with fnUpdate, but internally this new pkg reference
+	// references a diff env than the spec
 
 	// update function spec with new package metadata
 	function.Spec.Package.PackageRef = fission.PackageRef{

@@ -66,8 +66,7 @@ func (deploy *NewDeploy) createOrGetDeployment(fn *crd.Function, env *crd.Enviro
 	}
 
 	if err != nil && k8s_err.IsNotFound(err) {
-		err = fission.SetupRBAC(deploy.kubernetesClient, fission.FissionFetcherSA, deployNamespace,
-			fission.FissionFetcherClusterRoleBinding, fission.ClusterAdminRole)
+		err := deploy.setupRBACObjs(deployNamespace, fn)
 		if err != nil {
 			return nil, err
 		}
@@ -88,6 +87,32 @@ func (deploy *NewDeploy) createOrGetDeployment(fn *crd.Function, env *crd.Enviro
 
 	return nil, err
 
+}
+
+func (deploy *NewDeploy) setupRBACObjs(deployNamespace string, fn *crd.Function) error {
+	// create fetcher SA in this ns, if not already created
+	_, err := fission.SetupSA(deploy.kubernetesClient, fission.FissionFetcherSA, deployNamespace)
+	if err != nil {
+		log.Printf("Error : %v creating %s in ns : %s for function: %s.%s", err, fission.FissionFetcherSA, deployNamespace, fn.Metadata.Name)
+		return err
+	}
+
+	// create a cluster role binding for the fetcher SA, if not already created, granting access to do a get on packages in any ns
+	fission.SetupRoleBinding(deploy.kubernetesClient, fission.PackageGetterRB, fn.Spec.Package.PackageRef.Namespace, fission.PackageGetterCR, fission.ClusterRole, fission.FissionFetcherSA, deployNamespace)
+	if err != nil {
+		log.Printf("Error : %v creating %s clusterRoleBinding for function: %s.%s", err, fission.PackageGetterRB, fn.Metadata.Name, fn.Metadata.Namespace)
+		return err
+	}
+
+	// create rolebinding in function namespace for fetcherSA.envNamespace to be able to get secrets and configmaps
+	err = fission.SetupRoleBinding(deploy.kubernetesClient, fission.GetSecretConfigMapRoleBinding, fn.Metadata.Namespace, fission.SecretConfigMapGetterCR, fission.ClusterRole, fission.FissionFetcherSA, deployNamespace)
+	if err != nil {
+		log.Printf("Error : %v creating %s clusterRoleBinding for function %s.%s", err, fission.GetSecretConfigMapRoleBinding, fn.Metadata.Name, fn.Metadata.Namespace)
+		return err
+	}
+
+	log.Printf("Successfully set up all RBAC objects for function : %s.%s", fn.Metadata.Name, fn.Metadata.Namespace)
+	return nil
 }
 
 func (deploy *NewDeploy) getDeployment(fn *crd.Function) (*v1beta1.Deployment, error) {

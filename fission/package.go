@@ -33,15 +33,14 @@ import (
 	"github.com/fission/fission/crd"
 )
 
-// TODO : Verify this
 func getFunctionsByPackage(client *client.Client, pkgName, pkgNamespace string) ([]crd.Function, error) {
-	fnList, err := client.FunctionList(metav1.NamespaceAll)
+	fnList, err := client.FunctionList(pkgNamespace)
 	if err != nil {
 		return nil, err
 	}
 	fns := []crd.Function{}
 	for _, fn := range fnList {
-		if fn.Spec.Package.PackageRef.Name == pkgName && fn.Spec.Package.PackageRef.Namespace == pkgNamespace {
+		if fn.Spec.Package.PackageRef.Name == pkgName {
 			fns = append(fns, fn)
 		}
 	}

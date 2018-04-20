@@ -443,4 +443,12 @@ const (
 
 	FissionFetcherSA                 = "fission-fetcher"
 	FissionFetcherClusterRoleBinding = "fission-fetcher-crd"
+
+	SecretConfigMapGetterCR       = "secret-configmap-getter"
+	GetSecretConfigMapRoleBinding = "secret-configmap-getter-binding"
+
+	PackageGetterCR = "package-getter"
+	PackageGetterRB = "package-getter-binding"
+
+	ClusterRole = "ClusterRole"
 )

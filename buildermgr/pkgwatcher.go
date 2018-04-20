@@ -30,26 +30,28 @@ import (
 	"github.com/fission/fission"
 	"github.com/fission/fission/cache"
 	"github.com/fission/fission/crd"
+	"k8s.io/client-go/kubernetes"
 )
 
 type (
 	packageWatcher struct {
 		fissionClient    *crd.FissionClient
+		k8sClient        *kubernetes.Clientset
 		podStore         k8sCache.Store
 		builderNamespace string
 		storageSvcUrl    string
 	}
 )
 
-func makePackageWatcher(fissionClient *crd.FissionClient, getter k8sCache.Getter,
+func makePackageWatcher(fissionClient *crd.FissionClient, k8sClientSet *kubernetes.Clientset,
 	builderNamespace string, storageSvcUrl string) *packageWatcher {
-	// TODO : builderNs -> envNamespace ?
-	lw := k8sCache.NewListWatchFromClient(getter, "pods", metav1.NamespaceAll, fields.Everything())
+	lw := k8sCache.NewListWatchFromClient(k8sClientSet.CoreV1().RESTClient(), "pods", metav1.NamespaceAll, fields.Everything())
 	store, controller := k8sCache.NewInformer(lw, &apiv1.Pod{}, 30*time.Second, k8sCache.ResourceEventHandlerFuncs{})
 	go controller.Run(make(chan struct{}))
 
 	pkgw := &packageWatcher{
 		fissionClient:    fissionClient,
+		k8sClient:        k8sClientSet,
 		podStore:         store,
 		builderNamespace: builderNamespace,
 		storageSvcUrl:    storageSvcUrl,
@@ -146,6 +148,12 @@ func (pkgw *packageWatcher) build(buildCache *cache.Cache, pkg *crd.Package) {
 				break
 			}
 
+			// Add the package getter rolebinding to builder sa
+			err := fission.SetupRoleBinding(pkgw.k8sClient, fission.PackageGetterRB, pkg.Metadata.Namespace, fission.PackageGetterCR, fission.ClusterRole, fission.FissionBuilderSA, ns)
+			if err != nil {
+				log.Printf("Error : %v in setting up the role binding %s for pkg : %s.%s", err, fission.PackageGetterRB, pkg.Metadata.Name, pkg.Metadata.Namespace)
+			}
+
 			uploadResp, buildLogs, err := buildPackage(pkgw.fissionClient, ns, pkgw.storageSvcUrl, pkg)
 			if err != nil {
 				log.Printf("Error building package %v: %v", pkg.Metadata.Name, err)
@@ -201,7 +209,8 @@ func (pkgw *packageWatcher) build(buildCache *cache.Cache, pkg *crd.Package) {
 	return
 }
 
-func (pkgw *packageWatcher) watchPackages() {
+func (pkgw *packageWatcher) watchPackages(fissionClient *crd.FissionClient,
+	kubernetesClient *kubernetes.Clientset, builderNamespace string) {
 	buildCache := cache.MakeCache(0, 0)
 	lw := k8sCache.NewListWatchFromClient(pkgw.fissionClient.GetCrdClient(), "packages", apiv1.NamespaceAll, fields.Everything())
 	_, controller := k8sCache.NewInformer(lw, &crd.Package{}, 60*time.Second, k8sCache.ResourceEventHandlerFuncs{

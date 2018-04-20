@@ -52,8 +52,8 @@ type (
 		instanceId     string
 		requestChannel chan *request
 
-		enableIstio          bool
-		istioServiceRegister k8sCache.Controller
+		enableIstio    bool
+		funcController k8sCache.Controller
 	}
 	request struct {
 		requestType
@@ -92,20 +92,16 @@ func MakeGenericPoolManager(
 			log.Println("Failed to parse ENABLE_ISTIO")
 		}
 		gpm.enableIstio = istio
-
-		if gpm.enableIstio {
-			gpm.istioServiceRegister = makeFuncIstioServiceRegister(
-				gpm.fissionClient.GetCrdClient(), gpm.kubernetesClient, functionNamespace)
-		}
 	}
+
+	gpm.funcController = makeFuncController(
+		gpm.fissionClient.GetCrdClient(), gpm.kubernetesClient, gpm.namespace, gpm.enableIstio)
 
 	return gpm
 }
 
 func (gpm *GenericPoolManager) Run(ctx context.Context) {
-	if gpm.enableIstio && gpm.istioServiceRegister != nil {
-		go gpm.istioServiceRegister.Run(ctx.Done())
-	}
+	go gpm.funcController.Run(ctx.Done())
 }
 
 func (gpm *GenericPoolManager) service() {
@@ -113,7 +109,6 @@ func (gpm *GenericPoolManager) service() {
 		req := <-gpm.requestChannel
 		switch req.requestType {
 		case GET_POOL:
-			// TODO : If the executor is stopped and started again, although an env n its pool is present in k8s cluster,
 			// just because they are missing in the cache, we end up creating another duplicate pool.
 			var err error
 			pool, ok := gpm.pools[crd.CacheKey(&req.env.Metadata)]

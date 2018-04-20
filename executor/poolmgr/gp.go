@@ -152,10 +152,10 @@ func MakeGenericPool(
 	gp.fetcherImagePullPolicy = getImagePullPolicy(fetcherImagePullPolicy)
 	log.Printf("fetcher image: %v, pull policy: %v", gp.fetcherImage, gp.fetcherImagePullPolicy)
 
-	// setup RBAC
-	err := fission.SetupRBAC(gp.kubernetesClient, fission.FissionFetcherSA, gp.namespace,
-		fission.FissionFetcherClusterRoleBinding, fission.ClusterAdminRole)
+	// create fetcher SA in this ns, if not already created
+	_, err := fission.SetupSA(gp.kubernetesClient, fission.FissionFetcherSA, gp.namespace)
 	if err != nil {
+		log.Printf("Error : %v creating fetcher SA in ns : %s", err, gp.namespace)
 		return nil, err
 	}
 
@@ -479,10 +479,12 @@ func (gp *GenericPool) createPool() error {
 
 	// Use long terminationGracePeriodSeconds for connection draining in case that
 	// pod still runs user functions.
-	gracePeriodSeconds := int64(6 * 60)
-	if gp.env.Spec.TerminationGracePeriod > 0 {
-		gracePeriodSeconds = gp.env.Spec.TerminationGracePeriod
-	}
+	//gracePeriodSeconds := int64(6 * 60)
+	//if gp.env.Spec.TerminationGracePeriod > 0 {
+	//	gracePeriodSeconds = gp.env.Spec.TerminationGracePeriod
+	//}
+
+	gracePeriodSeconds := int64(0)
 
 	podAnnotation := make(map[string]string)
 
@@ -846,6 +848,9 @@ func (gp *GenericPool) destroy() error {
 			}
 		}
 	}
+
+	// get on all env in this ns. if this is the last one, then delete the fetcher - sa from the cluster-rolebinding pkg-getter-rolebinding.
+	// TODO : This may not be very efficient, but shdnt affect performance from user's perspective.
 
 	return nil
 }

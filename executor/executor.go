@@ -25,6 +25,7 @@ import (
 
 	"github.com/dchest/uniuri"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
 
 	"github.com/fission/fission"
 	"github.com/fission/fission/cache"
@@ -201,6 +202,25 @@ func dumpStackTrace() {
 	debug.PrintStack()
 }
 
+func CreateClusterRoles(kubernetesClient *kubernetes.Clientset) error {
+	// CR for secret and configMap getter
+	err := fission.SetupClusterRole(kubernetesClient, fission.MakeSecretAndConfigMapGetterCRObj())
+	if err != nil {
+		log.Printf("Error : %v creating SecretConfigMapGetterCR clusterRole", err)
+		return err
+	}
+
+	// CR for package getter
+	err = fission.SetupClusterRole(kubernetesClient, fission.MakePackageGetterCRObj())
+	if err != nil {
+		log.Printf("Error : %v creating fission.PackageGetterCR clusterRole", err)
+		return err
+	}
+
+	log.Printf("Created ClusterRoles %s and %s", fission.SecretConfigMapGetterCR, fission.PackageGetterCR)
+	return nil
+}
+
 // StartExecutor Starts executor and the executor components such as Poolmgr,
 // deploymgr and potential future executor types
 func StartExecutor(fissionNamespace string, functionNamespace string, port int) error {
@@ -222,11 +242,15 @@ func StartExecutor(fissionNamespace string, functionNamespace string, port int) 
 
 	fsCache := fscache.MakeFunctionServiceCache()
 
+	err = CreateClusterRoles(kubernetesClient)
+	if err != nil {
+		log.Fatalf("Error setting up cluster roles: %v", err)
+	}
+
 	poolID := strings.ToLower(uniuri.NewLen(8))
 	cleanupObjects(kubernetesClient, functionNamespace, poolID)
 	go idleObjectReaper(kubernetesClient, fissionClient, fsCache, time.Minute*2)
 
-	// TODO : Come back and think of helm upgrades if we remove functionNamespace from these mgr objects.
 	gpm := poolmgr.MakeGenericPoolManager(
 		fissionClient, kubernetesClient,
 		functionNamespace, fsCache, poolID)
