@@ -24,6 +24,7 @@ import (
 	"os/signal"
 	"runtime/debug"
 	"strings"
+	"log"
 	"syscall"
 
 	"github.com/gorilla/handlers"
@@ -33,6 +34,8 @@ import (
 	"k8s.io/client-go/kubernetes"
 	apiv1 "k8s.io/client-go/pkg/api/v1"
 	rbac "k8s.io/client-go/pkg/apis/rbac/v1beta1"
+	types "k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/json"
 )
 
 func UrlForFunction(name, namespace string) string {
@@ -150,50 +153,6 @@ func SetupSA(k8sClient *kubernetes.Clientset, sa, ns string) (*apiv1.ServiceAcco
 	return saObj, err
 }
 
-func MakeSecretAndConfigMapGetterCRObj() *rbac.ClusterRole {
-	return &rbac.ClusterRole{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: SecretConfigMapGetterCR,
-		},
-		Rules: []rbac.PolicyRule{
-			{
-				// TODO : Add configMap
-				APIGroups: []string{rbac.APIGroupAll},
-				Resources: []string{"secrets"},
-				Verbs:     []string{"get", "watch", "list"},
-			},
-		},
-	}
-}
-
-func MakePackageGetterCRObj() *rbac.ClusterRole {
-	return &rbac.ClusterRole{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: PackageGetterCR,
-		},
-		Rules: []rbac.PolicyRule{
-			{
-				APIGroups: []string{rbac.APIGroupAll},
-				Resources: []string{"packages"},
-				Verbs:     []string{"get", "watch", "list"},
-			},
-		},
-	}
-}
-
-func SetupClusterRole(k8sClient *kubernetes.Clientset, crObj *rbac.ClusterRole) error {
-	crObj, err := k8sClient.RbacV1beta1().ClusterRoles().Get(crObj.Name, metav1.GetOptions{})
-	if err == nil {
-		return nil
-	}
-
-	if k8serrors.IsNotFound(err) {
-		crObj, err = k8sClient.RbacV1beta1Client.ClusterRoles().Create(crObj)
-	}
-
-	return err
-}
-
 func makeRoleBindingObj(roleBinding, roleBindingNs, role, roleKind, sa, saNamespace string) *rbac.RoleBinding {
 	return &rbac.RoleBinding{
 		ObjectMeta: metav1.ObjectMeta{
@@ -238,18 +197,7 @@ func RemoveSAFromRoleBinding(k8sClient *kubernetes.Clientset, roleBinding, roleB
 	return err
 }
 
-func addSAToRoleBinding(k8sClient *kubernetes.Clientset, rbObj *rbac.RoleBinding, sa, ns string) error {
-	subjects := rbObj.Subjects
-	subjects = append(subjects, rbac.Subject{
-		Kind:      "ServiceAccount",
-		Name:      sa,
-		Namespace: ns,
-	})
-	rbObj.Subjects = subjects
 
-	_, err := k8sClient.RbacV1beta1().RoleBindings(rbObj.Namespace).Update(rbObj)
-	return err
-}
 
 func isSAInRoleBinding(rbObj *rbac.RoleBinding, sa, ns string) bool {
 	for _, subject := range rbObj.Subjects {
@@ -261,23 +209,57 @@ func isSAInRoleBinding(rbObj *rbac.RoleBinding, sa, ns string) bool {
 	return false
 }
 
+type PatchSpec struct {
+        Op    string `json:"op"`
+        Path  string `json:"path"`
+	Value rbac.Subject `json:"value"`
+}
+
+func AddSaToRoleBinding(k8sClient *kubernetes.Clientset, roleBinding, roleBindingNs, sa, saNamespace string) error {
+	patch := PatchSpec{}
+	patch.Op = "add"
+	patch.Path = "/subjects/-"
+	patch.Value = rbac.Subject{
+		Kind:      "ServiceAccount",
+		Name:      sa,
+		Namespace: saNamespace,
+	}
+
+	patchJson, err := json.Marshal([]PatchSpec{patch})
+	if err != nil {
+		log.Printf("Error marshalling patch into json")
+		return err
+	}
+
+	log.Printf("Final patchJson : %s", string(patchJson))
+
+	_, err = k8sClient.RbacV1beta1().RoleBindings(roleBindingNs).Patch(roleBinding, types.JSONPatchType, patchJson)
+	return err
+}
+
 func SetupRoleBinding(k8sClient *kubernetes.Clientset, roleBinding, roleBindingNs, role, roleKind, sa, saNamespace string) error {
 	// get the role binding object
 	rbObj, err := k8sClient.RbacV1beta1().RoleBindings(roleBindingNs).Get(
 		roleBinding, metav1.GetOptions{})
 
+	log.Printf("did a get on rolebing")
 	if err == nil {
-		// if role binding exists then check if this sa is part of the binding. if not, add it
 		if !isSAInRoleBinding(rbObj, sa, saNamespace) {
-			return addSAToRoleBinding(k8sClient, rbObj, sa, saNamespace)
+			return AddSaToRoleBinding(k8sClient, roleBinding, roleBindingNs, sa, saNamespace)
 		}
 		return nil
 	}
 
 	// if role binding is missing, create it. also add this sa to the binding.
 	if k8serrors.IsNotFound(err) {
+		log.Printf("Rolebinding obj : %s does NOT exist in ns : %s. Creating a newobj", roleBinding, roleBindingNs)
 		rbObj = makeRoleBindingObj(roleBinding, roleBindingNs, role, roleKind, sa, saNamespace)
 		rbObj, err = k8sClient.RbacV1beta1().RoleBindings(roleBindingNs).Create(rbObj)
+		if k8serrors.IsAlreadyExists(err) || k8serrors.IsConflict(err) {
+			// do a patch
+			log.Printf("Conflic or already exists")
+			err = AddSaToRoleBinding(k8sClient, roleBinding, roleBindingNs, sa, saNamespace)
+		}
 	}
 
 	return err

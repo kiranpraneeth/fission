@@ -164,7 +164,7 @@ func fnCreate(c *cli.Context) error {
 			Namespace: fnNamespace,
 			Name:      pkgName,
 		})
-		checkErr(err, fmt.Sprintf("read package in Namespace: %s, '%v'. Package needs to be present in the same namespace as function", fnNamespace, pkgName))
+		checkErr(err, fmt.Sprintf("read package in '%v' in Namespace: %s. Package needs to be present in the same namespace as function", pkgName, fnNamespace))
 		pkgMetadata = &pkg.Metadata
 		envName = pkg.Spec.Environment.Name
 		envNamespace = pkg.Spec.Environment.Namespace
@@ -211,7 +211,7 @@ func fnCreate(c *cli.Context) error {
 	if alertOnSharedEnv {
 		fnList, _ := getFunctionsByEnvironment(client, envName, envNamespace)
 		if len(fnList) > 0 {
-			warn(fmt.Sprintf("Environment : %s.%s is referenced by %d functions. When these functions are loaded in the env, they can use the SA mounted to view each others secrets.", envName, envNamespace, len(fnList)))
+			warn(fmt.Sprintf("Environment : %s.%s is referenced by %d other function(s). When these functions are loaded in the env, they can use the SA mounted in their pods to view each others secrets.", envName, envNamespace, len(fnList)))
 		}
 	}
 

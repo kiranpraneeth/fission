@@ -53,7 +53,6 @@ type (
 	}
 )
 
-// TODO : Come back
 func MakeAPI() (*API, error) {
 	api, err := makeCRDBackedAPI()
 
@@ -222,6 +221,9 @@ func (api *API) Serve(port int) {
 	r.HandleFunc("/v2/triggers/messagequeue/{mqTrigger}", api.MessageQueueTriggerApiDelete).Methods("DELETE")
 
 	r.HandleFunc("/v2/deleteTpr", api.Tpr2crdApi).Methods("DELETE")
+
+	r.HandleFunc("/v2/secrets/{secret}", api.SecretGet).Methods("GET")
+	r.HandleFunc("/v2/configmaps/{configmap}", api.ConfigMapGet).Methods("GET")
 
 	r.HandleFunc("/proxy/{dbType}", api.FunctionLogsApiPost).Methods("POST")
 	r.HandleFunc("/proxy/storage/v1/archive", api.StorageServiceProxy)

@@ -48,7 +48,7 @@ func makePkgController(fissionClient *crd.FissionClient,
 
 				err := fission.SetupRoleBinding(kubernetesClient, fission.PackageGetterRB, pkg.Metadata.Namespace, fission.PackageGetterCR, fission.ClusterRole, fission.FissionFetcherSA, envNs)
 				if err != nil {
-					log.Printf("Error : %v creating %s for package: %s.%s", err, fission.PackageGetterRB, pkg.Metadata.Name, pkg.Metadata.Namespace)
+					log.Printf("Error creating %s for package: %s.%s, err: %v",fission.PackageGetterRB, pkg.Metadata.Name, pkg.Metadata.Namespace, err)
 				}
 
 				log.Printf("Successfully set up rolebinding for fetcher SA: %s.%s, in packages's ns : %s, for pkg : %s", fission.FissionFetcherSA, envNs, pkg.Metadata.Namespace, pkg.Metadata.Name)

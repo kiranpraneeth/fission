@@ -54,6 +54,7 @@ type (
 
 		enableIstio    bool
 		funcController k8sCache.Controller
+		pkgController k8sCache.Controller
 	}
 	request struct {
 		requestType
@@ -97,11 +98,14 @@ func MakeGenericPoolManager(
 	gpm.funcController = makeFuncController(
 		gpm.fissionClient.GetCrdClient(), gpm.kubernetesClient, gpm.namespace, gpm.enableIstio)
 
+	gpm.pkgController = makePkgController(gpm.fissionClient, gpm.kubernetesClient, gpm.namespace)
+
 	return gpm
 }
 
 func (gpm *GenericPoolManager) Run(ctx context.Context) {
 	go gpm.funcController.Run(ctx.Done())
+	go gpm.pkgController.Run(ctx.Done())
 }
 
 func (gpm *GenericPoolManager) service() {

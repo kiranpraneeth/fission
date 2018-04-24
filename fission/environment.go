@@ -55,6 +55,13 @@ func envCreate(c *cli.Context) error {
 	}
 	envNamespace := c.String("envNamespace")
 
+	envList, err := client.EnvironmentList(envNamespace)
+	if err == nil && len(envList) > 0 {
+		warn(fmt.Sprintf("%d environments are present in this ns: %s. All these envs share" +
+			" the same service account token, with previleges to view secrets of all the functions referencing them. " +
+			"Envs can be created in different ns if isolation is needed", len(envList)))
+	}
+
 	var poolsize int
 	if c.IsSet("poolsize") {
 		poolsize = c.Int("poolsize")
@@ -122,7 +129,7 @@ func envCreate(c *cli.Context) error {
 		return nil
 	}
 
-	_, err := client.EnvironmentCreate(env)
+	_, err = client.EnvironmentCreate(env)
 	checkErr(err, "create environment")
 
 	fmt.Printf("environment '%v' created\n", envName)
