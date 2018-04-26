@@ -29,6 +29,7 @@ import (
 	"github.com/fission/fission/crd"
 )
 
+// TODO : It may make sense to make each of add, update, delete funcs run as separate go routines.
 func makePkgController(fissionClient *crd.FissionClient,
 	kubernetesClient *kubernetes.Clientset, fissionfnNamespace string) k8sCache.Controller {
 
@@ -48,7 +49,8 @@ func makePkgController(fissionClient *crd.FissionClient,
 
 				err := fission.SetupRoleBinding(kubernetesClient, fission.PackageGetterRB, pkg.Metadata.Namespace, fission.PackageGetterCR, fission.ClusterRole, fission.FissionFetcherSA, envNs)
 				if err != nil {
-					log.Printf("Error creating %s for package: %s.%s, err: %v",fission.PackageGetterRB, pkg.Metadata.Name, pkg.Metadata.Namespace, err)
+					log.Printf("Error creating %s for package: %s.%s, err: %v", fission.PackageGetterRB, pkg.Metadata.Name, pkg.Metadata.Namespace, err)
+					return
 				}
 
 				log.Printf("Successfully set up rolebinding for fetcher SA: %s.%s, in packages's ns : %s, for pkg : %s", fission.FissionFetcherSA, envNs, pkg.Metadata.Namespace, pkg.Metadata.Name)
@@ -67,6 +69,7 @@ func makePkgController(fissionClient *crd.FissionClient,
 					err = fission.DeleteRoleBinding(kubernetesClient, fission.PackageGetterRB, pkg.Metadata.Namespace)
 					if err != nil {
 						log.Printf("Error deleting role binding: %s.%s", fission.PackageGetterRB, pkg.Metadata.Namespace)
+						return
 					}
 					log.Printf("Deleted role binding: %s.%s", fission.PackageGetterRB, pkg.Metadata.Namespace)
 					return
@@ -79,7 +82,7 @@ func makePkgController(fissionClient *crd.FissionClient,
 						return
 					}
 				}
-				// us landing here implies no other pkg in this ns share the env, so safely remove sa from role-binding
+				// us landing here implies no other pkg in this ns references this env, so safely remove sa from role-binding
 				envNs := fissionfnNamespace
 				if pkg.Spec.Environment.Namespace != metav1.NamespaceDefault {
 					envNs = pkg.Spec.Environment.Namespace
@@ -87,6 +90,7 @@ func makePkgController(fissionClient *crd.FissionClient,
 				err = fission.RemoveSAFromRoleBinding(kubernetesClient, fission.PackageGetterRB, pkg.Metadata.Namespace, fission.FissionFetcherSA, envNs)
 				if err != nil {
 					log.Printf("Error removing sa: %s.%s from role binding: %s.%s", fission.FissionFetcherSA, envNs, fission.PackageGetterRB, pkg.Metadata.Namespace)
+					return
 				}
 				log.Printf("Removed sa : %s.%s from role binding: %s.%s", fission.FissionFetcherSA, envNs, fission.PackageGetterRB, pkg.Metadata.Namespace)
 			},
@@ -105,11 +109,14 @@ func makePkgController(fissionClient *crd.FissionClient,
 					}
 					log.Printf("Updating rolebinding for fetcher SA in pkg's env ns : %s, in pkg's ns : %s, for func : %s", newPkg.Spec.Environment.Namespace, newPkg.Metadata.Namespace, newPkg.Metadata.Name)
 
+					// TODO : also remove old sa : fission-fetcher.oldEnvNs from rolebinding, if there are no pkgs in this ns referencing env there.
+
 					err := fission.SetupRoleBinding(kubernetesClient, fission.PackageGetterRB,
 						newPkg.Metadata.Namespace, fission.PackageGetterCR, fission.ClusterRole,
 						fission.FissionFetcherSA, envNs)
 					if err != nil {
 						log.Printf("Error : %v updating %s for package: %s.%s", err, fission.PackageGetterRB, newPkg.Metadata.Name, newPkg.Metadata.Namespace)
+						return
 					}
 					log.Printf("Successfully updated rolebinding for fetcher SA: %s.%s, in packages's ns : %s, for pkg : %s", fission.FissionFetcherSA, envNs, newPkg.Metadata.Namespace, newPkg.Metadata.Name)
 				}

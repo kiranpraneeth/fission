@@ -537,6 +537,10 @@ func (deploy *NewDeploy) fnDelete(fn *crd.Function) (*fscache.FuncSvc, error) {
 	if delError != nil {
 		return nil, delError
 	}
+
+	// TODO : RemoveAllRolebindings established for this function.
+	go deploy.cleanupRBACObjs(ns, fn)
+
 	return nil, nil
 }
 

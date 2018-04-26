@@ -121,7 +121,7 @@ func fnCreate(c *cli.Context) error {
 
 	fnNamespace := c.String("fnNamespace")
 	envNamespace := c.String("envNamespace")
-	alertOnSharedEnv := c.Bool("alert-on-shared-env")
+	noEnvSharing := c.Bool("no-env-sharing")
 
 	if len(c.String("package")) > 0 {
 		fatal("--package is deprecated, please use --deploy instead.")
@@ -204,14 +204,13 @@ func fnCreate(c *cli.Context) error {
 		pkgMetadata = createPackage(client, fnNamespace, envName, envNamespace, srcArchiveName, deployArchiveName, buildcmd, specFile)
 	}
 
-	// At this point, we need to check if any other function in any ns has the same env reference if user has asked for this info.
+	// If the user doesnt want to share his environment with any other function
 	// if so, warn the user that when the other function gets loaded in the env pod, the service account mounted in the env pod will have permissions to view his secret
-	// but this is a trade-off for being able to share warm-env containers. by default, we encourage sharing of env containers for optimal resource consumption.
-	// this might seem a bit over-kill in terms of performance, but since we do this in the cli and only if user has requested for notification, it should be ok.
-	if alertOnSharedEnv {
+	// but this is a trade-off for being able to share warm env containers. by default, we encourage sharing of env containers for optimal resource consumption.
+	if noEnvSharing {
 		fnList, _ := getFunctionsByEnvironment(client, envName, envNamespace)
 		if len(fnList) > 0 {
-			warn(fmt.Sprintf("Environment : %s.%s is referenced by %d other function(s). When these functions are loaded in the env, they can use the SA mounted in their pods to view each others secrets.", envName, envNamespace, len(fnList)))
+			fatal(fmt.Sprintf("Environment : %s.%s is referenced by %d other function(s). When these functions are loaded in the env, they can use the SA mounted in their pods to view each others secrets.", envName, envNamespace, len(fnList)))
 		}
 	}
 
@@ -407,7 +406,7 @@ func fnUpdate(c *cli.Context) error {
 
 	envName := c.String("env")
 	envNamespace := c.String("envNamespace")
-	alertOnSharedEnv := c.Bool("alert-on-shared-env")
+	noEnvSharing := c.Bool("no-env-sharing")
 	deployArchiveName := c.String("code")
 	if len(deployArchiveName) == 0 {
 		deployArchiveName = c.String("deploy")
@@ -420,10 +419,11 @@ func fnUpdate(c *cli.Context) error {
 
 	secretName := c.String("secret")
 	cfgMapName := c.String("configmap")
+	executorType := c.String("executortype")
 
 	if len(envName) == 0 && len(deployArchiveName) == 0 && len(srcArchiveName) == 0 && len(pkgName) == 0 &&
-		len(entrypoint) == 0 && len(buildcmd) == 0 && len(secretName) == 0 && len(cfgMapName) == 0 {
-		fatal("Need --env or --deploy or --src or --pkg or --entrypoint or --buildcmd or --secret or --configmap argument.")
+		len(entrypoint) == 0 && len(buildcmd) == 0 && len(secretName) == 0 && len(cfgMapName) == 0 && len(executorType) == 0{
+		fatal("Need --env or --deploy or --src or --pkg or --entrypoint or --buildcmd or --secret or --configmap or --executorType argument.")
 	}
 
 	if len(secretName) > 0 {
@@ -472,14 +472,13 @@ func fnUpdate(c *cli.Context) error {
 		function.Spec.Environment.Name = envName
 		function.Spec.Environment.Namespace = envNamespace
 
-		// At this point, we need to check if any other function in any ns has the same env reference if user has asked for this info.
+		// If the user doesnt want to share his environment with any other function
 		// if so, warn the user that when the other function gets loaded in the env pod, the service account mounted in the env pod will have permissions to view his secret
-		// but this is a trade-off for being able to share warm-env containers. by default, we encourage sharing of env containers for optimal resource consumption.
-		// this might seem a bit over-kill in terms of performance, but since we do this in the cli and only if user has requested for notification, it should be ok.
-		if alertOnSharedEnv {
+		// but this is a trade-off for being able to share warm env containers. by default, we encourage sharing of env containers for optimal resource consumption.
+		if noEnvSharing {
 			fnList, _ := getFunctionsByEnvironment(client, envName, envNamespace)
 			if len(fnList) > 0 {
-				warn(fmt.Sprintf("Environment : %s.%s is referenced by %d functions. When these functions are loaded in the env, they can use the SA mounted to view each others secrets.", envName, envNamespace, len(fnList)))
+				fatal(fmt.Sprintf("Environment : %s.%s is referenced by %d functions. When these functions are loaded in the env, they can use the SA mounted in their pods to view each others secrets.", envName, envNamespace, len(fnList)))
 			}
 		}
 	}
@@ -607,7 +606,6 @@ func fnDelete(c *cli.Context) error {
 	return err
 }
 
-// TODO : STV. if user input nothing, default shd be "all" ns only for this operation
 func fnList(c *cli.Context) error {
 	client := getClient(c.GlobalString("server"))
 	ns := c.String("fnNamespace")

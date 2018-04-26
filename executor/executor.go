@@ -201,25 +201,6 @@ func dumpStackTrace() {
 	debug.PrintStack()
 }
 
-//func CreateClusterRoles(kubernetesClient *kubernetes.Clientset) error {
-//	// CR for secret and configMap getter
-//	err := fission.SetupClusterRole(kubernetesClient, fission.MakeSecretAndConfigMapGetterCRObj())
-//	if err != nil {
-//		log.Printf("Error : %v creating SecretConfigMapGetterCR clusterRole", err)
-//		return err
-//	}
-//
-//	// CR for package getter
-//	err = fission.SetupClusterRole(kubernetesClient, fission.MakePackageGetterCRObj())
-//	if err != nil {
-//		log.Printf("Error : %v creating fission.PackageGetterCR clusterRole", err)
-//		return err
-//	}
-//
-//	log.Printf("Created ClusterRoles %s and %s", fission.SecretConfigMapGetterCR, fission.PackageGetterCR)
-//	return nil
-//}
-
 // StartExecutor Starts executor and the executor components such as Poolmgr,
 // deploymgr and potential future executor types
 func StartExecutor(fissionNamespace string, functionNamespace string, port int) error {

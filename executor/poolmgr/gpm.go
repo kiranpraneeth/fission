@@ -54,7 +54,7 @@ type (
 
 		enableIstio    bool
 		funcController k8sCache.Controller
-		pkgController k8sCache.Controller
+		pkgController  k8sCache.Controller
 	}
 	request struct {
 		requestType
@@ -96,7 +96,7 @@ func MakeGenericPoolManager(
 	}
 
 	gpm.funcController = makeFuncController(
-		gpm.fissionClient.GetCrdClient(), gpm.kubernetesClient, gpm.namespace, gpm.enableIstio)
+		gpm.fissionClient, gpm.kubernetesClient, gpm.namespace, gpm.enableIstio)
 
 	gpm.pkgController = makePkgController(gpm.fissionClient, gpm.kubernetesClient, gpm.namespace)
 
@@ -155,6 +155,7 @@ func (gpm *GenericPoolManager) service() {
 
 					// and delete the pool asynchronously.
 					go pool.destroy()
+					go pool.cleanupRoleBindings()
 				}
 			}
 			// no response, caller doesn't wait

@@ -849,8 +849,34 @@ func (gp *GenericPool) destroy() error {
 		}
 	}
 
-	// get on all env in this ns. if this is the last one, then delete the fetcher - sa from the cluster-rolebinding pkg-getter-rolebinding.
-	// TODO : This may not be very efficient, but shdnt affect performance from user's perspective.
-
 	return nil
+}
+
+// This seems like an overkill, but it runs it a separate go-routine, so shouldnt affect performance
+func (gp *GenericPool) cleanupRoleBindings() {
+	log.Printf("cleaning up rolebindings for gp : %s.%s", gp.env.Metadata.Name, gp.env.Metadata.Namespace)
+	// 0. funcList, err := getFunctionsByEnv(UsingPoolMgrExecutor)
+	fnList, err := crd.GetFunctionsByEnv(gp.fissionClient, gp.env.Metadata.Name, gp.env.Metadata.Namespace)
+	if err != nil {
+		log.Printf("Error getting functions by env : %s.%s. err : %v", gp.env.Metadata.Name, gp.env.Metadata.Namespace, err)
+	}
+
+	// 1. for each function, get the Ns, remove fetcherSA.envNs from pkg-getter-rolebinding, remove fetcherSA.envNs from secret-configMap-getter-rolebinding
+	for _, item := range fnList {
+		err = fission.RemoveSAFromRoleBinding(gp.kubernetesClient, fission.PackageGetterRB, item.Namespace, fission.FissionFetcherSA, gp.env.Metadata.Namespace)
+		if err != nil {
+			log.Printf("Error removing sa: %s.%s from rolebinding : %s.%s", fission.FissionFetcherSA, gp.env.Metadata.Namespace, fission.PackageGetterRB, item.Namespace)
+		}
+
+		err = fission.RemoveSAFromRoleBinding(gp.kubernetesClient, fission.PackageGetterRB, item.Namespace, fission.FissionBuilderSA, gp.env.Metadata.Namespace)
+		if err != nil {
+			log.Printf("Error removing sa: %s.%s from rolebinding : %s.%s", fission.FissionBuilderSA, gp.env.Metadata.Namespace, fission.PackageGetterRB, item.Namespace)
+		}
+
+		err = fission.RemoveSAFromRoleBinding(gp.kubernetesClient, fission.GetSecretConfigMapRoleBinding, item.Namespace, fission.FissionFetcherSA, gp.env.Metadata.Namespace)
+		if err != nil {
+			log.Printf("Error removing sa: %s.%s from rolebinding : %s.%s", fission.FissionFetcherSA, gp.env.Metadata.Namespace, fission.GetSecretConfigMapRoleBinding, item.Namespace)
+		}
+		log.Printf("Removed all RoleBindings for pool : %s.%s", gp.env.Metadata.Name, gp.env.Metadata.Namespace)
+	}
 }

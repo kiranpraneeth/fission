@@ -209,6 +209,50 @@ func (pkgw *packageWatcher) build(buildCache *cache.Cache, pkg *crd.Package) {
 	return
 }
 
+// RemoveRoleBinding takes care of deleting rolebinding for pkg or removing builder sa from rolebinding,
+// just like pkg watcher in executor. while executor cleans up rolebindings for fetcher sa, this cleans up privileges
+// for builder sa.
+func (pkgw *packageWatcher) cleanupRoleBinding(pkg *crd.Package) {
+	// check if its not a source pkg, then return.
+	if pkg.Spec.Source.Type == "" {
+		log.Printf("No cleaning up of rolebinding required")
+	}
+
+	// list all packages in pkg.Ns.
+	pkgList, err := pkgw.fissionClient.Packages(pkg.Metadata.Namespace).List(metav1.ListOptions{})
+	if err != nil {
+		return
+	}
+
+	// if there are no pkgs in this ns, we shd ideally delete the RoleBinding, but, pkgWatcher in executor
+	// deletes the rolebinding. so we can just silently return.
+	if len(pkgList.Items) == 0 {
+		return
+	}
+
+	// loop through each of those and even if even one of them shares the same env as this pkg; return
+	for _, item := range pkgList.Items {
+		if item.Spec.Source.Type != "" && item.Spec.Environment.Name == pkg.Spec.Environment.Name &&
+			item.Spec.Environment.Namespace == pkg.Spec.Environment.Namespace {
+			log.Printf("Another pkg: %s with source is using the same env, nothing to do", pkg.Metadata.Name)
+			return
+		}
+	}
+
+	// us landing here implies no pkg in this ns uses this env, so remove fission-builder.envNs from rolebinding
+	envNs := pkgw.builderNamespace
+	if pkg.Spec.Environment.Namespace != metav1.NamespaceDefault {
+		envNs = pkg.Spec.Environment.Namespace
+	}
+	err = fission.RemoveSAFromRoleBinding(pkgw.k8sClient, fission.PackageGetterRB, pkg.Metadata.Namespace, fission.FissionBuilderSA, envNs)
+	if err != nil {
+		log.Printf("Error removing sa: %s.%s from role binding: %s.%s", fission.FissionBuilderSA, envNs, fission.PackageGetterRB, pkg.Metadata.Namespace)
+		return
+	}
+
+	log.Printf("Removed sa : %s.%s from role binding: %s.%s", fission.FissionBuilderSA, envNs, fission.PackageGetterRB, pkg.Metadata.Namespace)
+}
+
 func (pkgw *packageWatcher) watchPackages(fissionClient *crd.FissionClient,
 	kubernetesClient *kubernetes.Clientset, builderNamespace string) {
 	buildCache := cache.MakeCache(0, 0)
@@ -221,6 +265,11 @@ func (pkgw *packageWatcher) watchPackages(fissionClient *crd.FissionClient,
 		UpdateFunc: func(oldObj, newObj interface{}) {
 			pkg := newObj.(*crd.Package)
 			go pkgw.build(buildCache, pkg)
+		},
+
+		DeleteFunc: func(obj interface{}) {
+			pkg := obj.(*crd.Package)
+			go pkgw.cleanupRoleBinding(pkg)
 		},
 	})
 	controller.Run(make(chan struct{}))

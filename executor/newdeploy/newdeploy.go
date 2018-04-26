@@ -98,7 +98,7 @@ func (deploy *NewDeploy) setupRBACObjs(deployNamespace string, fn *crd.Function)
 	}
 
 	// create a cluster role binding for the fetcher SA, if not already created, granting access to do a get on packages in any ns
-	fission.SetupRoleBinding(deploy.kubernetesClient, fission.PackageGetterRB, fn.Spec.Package.PackageRef.Namespace, fission.PackageGetterCR, fission.ClusterRole, fission.FissionFetcherSA, deployNamespace)
+	err = fission.SetupRoleBinding(deploy.kubernetesClient, fission.PackageGetterRB, fn.Spec.Package.PackageRef.Namespace, fission.PackageGetterCR, fission.ClusterRole, fission.FissionFetcherSA, deployNamespace)
 	if err != nil {
 		log.Printf("Error : %v creating %s clusterRoleBinding for function: %s.%s", err, fission.PackageGetterRB, fn.Metadata.Name, fn.Metadata.Namespace)
 		return err
@@ -136,6 +136,55 @@ func (deploy *NewDeploy) deleteDeployment(ns string, name string) error {
 		return err
 	}
 	return nil
+}
+
+// TODO : this needs thorough testing
+func (deploy *NewDeploy) cleanupRBACObjs(deployNamespace string, fn *crd.Function) {
+	// 0. fnList of functions in this ns
+	fnList, err := deploy.fissionClient.Functions(fn.Metadata.Namespace).List(metav1.ListOptions{})
+	if err != nil {
+
+	}
+
+	if len(fnList.Items) == 0 {
+		// deleteRB
+		err := fission.DeleteRoleBinding(deploy.kubernetesClient, fission.PackageGetterRB, fn.Metadata.Namespace)
+		if err != nil {
+			return
+			log.Printf("Error deleting rolebinding : %s.%s", fission.PackageGetterRB, fn.Metadata.Namespace)
+		}
+		err = fission.DeleteRoleBinding(deploy.kubernetesClient, fission.GetSecretConfigMapRoleBinding, fn.Metadata.Namespace)
+		if err != nil {
+			log.Printf("Error deleting rolebinding : %s.%s", fission.GetSecretConfigMapRoleBinding, fn.Metadata.Namespace)
+			return
+		}
+		log.Printf("Deleted rolebinding : %s.%s and %s.%s", fission.GetSecretConfigMapRoleBinding, fn.Metadata.Namespace, fission.PackageGetterRB, fn.Metadata.Namespace)
+		return
+	}
+
+	for _, item := range fnList.Items {
+		if item.Spec.InvokeStrategy.ExecutionStrategy.ExecutorType == fission.ExecutorTypeNewdeploy ||
+			item.Spec.Environment.Namespace == fn.Metadata.Namespace ||
+			item.Spec.Environment.Namespace == metav1.NamespaceDefault {
+			log.Printf("There are other functions needing the rolebindings in this ns, so nothing to do")
+			return
+		}
+	}
+
+	// us landing here implies we can remove sa
+	err = fission.RemoveSAFromRoleBinding(deploy.kubernetesClient, fission.PackageGetterRB, fn.Metadata.Namespace, fission.FissionFetcherSA, deployNamespace)
+	if err != nil {
+		log.Printf("error removing sa : %s.%s from rolebinding : %s.%s, err = %v", fission.FissionFetcherSA, deployNamespace, fission.PackageGetterRB, fn.Metadata.Namespace, err)
+	}
+
+	err = fission.RemoveSAFromRoleBinding(deploy.kubernetesClient, fission.GetSecretConfigMapRoleBinding, fn.Metadata.Namespace, fission.FissionFetcherSA, deployNamespace)
+	if err != nil {
+		log.Printf("error removing sa : %s.%s from rolebinding : %s.%s, err = %v", fission.FissionFetcherSA, deployNamespace, fission.GetSecretConfigMapRoleBinding, fn.Metadata.Namespace, err)
+	}
+
+	if err == nil {
+		log.Printf("Removed sa : %s.%s from rolebinding : %s.%s and %s.%s", fission.FissionFetcherSA, deployNamespace, fission.GetSecretConfigMapRoleBinding, fn.Metadata.Namespace, fission.PackageGetterRB, fn.Metadata.Namespace)
+	}
 }
 
 func (deploy *NewDeploy) getDeploymentSpec(fn *crd.Function, env *crd.Environment,
